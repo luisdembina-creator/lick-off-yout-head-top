@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Classic Breakout: Face Edition</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            user-select: none;
+        }
+
+        #ui-container {
+            display: flex;
+            justify-content: space-between;
+            width: 800px;
+            margin-bottom: 15px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #0ff;
+            text-shadow: 0 0 5px #0ff;
+        }
+
+        #gameCanvas {
+            background-color: #000;
+            border: 2px solid #0ff;
+            box-shadow: 0 0 15px #0ff;
+            border-radius: 4px;
+        }
+
+        #game-over-screen {
+            position: absolute;
+            display: none; 
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 30px 50px;
+            border: 2px solid #f0f;
+            border-radius: 10px;
+            box-shadow: 0 0 20px #f0f;
+            text-align: center;
+            z-index: 10;
+        }
+
+        #game-over-screen h1 {
+            margin: 0 0 20px 0;
+            color: #f0f;
+            text-shadow: 0 0 10px #f0f;
+        }
+
+        #restart-btn {
+            padding: 10px 20px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #000;
+            background-color: #0ff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: 0.2s;
+            box-shadow: 0 0 10px #0ff;
+        }
+
+        #restart-btn:hover {
+            background-color: #fff;
+            box-shadow: 0 0 20px #fff;
+        }
+
+        #instructions {
+            margin-top: 15px;
+            color: #888;
+            font-size: 14px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div>Score: <span id="score-display">0</span></div>
+        <div>Lives: <span id="lives-display">3</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+
+    <div id="instructions">Move with ← → arrow keys or your mouse. Press SPACE to launch. Smash the faces!</div>
+
+    <div id="game-over-screen">
+        <h1 id="game-over-text">GAME OVER</h1>
+        <button id="restart-btn" onclick="resetGame()">Restart Game</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        const scoreDisplay = document.getElementById('score-display');
+        const livesDisplay = document.getElementById('lives-display');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const gameOverText = document.getElementById('game-over-text');
+
+        let score = 0;
+        let lives = 3;
+        let isGameOver = false;
+        let shakeTime = 0;
+
+        const paddleHeight = 12;
+        const paddleWidth = 100;
+        let paddleX = (canvas.width - paddleWidth) / 2;
+        let rightPressed = false;
+        let leftPressed = false;
+
+        const ballRadius = 10;
+        let x = canvas.width / 2;
+        let y = canvas.height - 30;
+        let dx = 5;
+        let dy = -5;
+        let ballAttached = true;
+
+        // 3 ROWS x 8 COLUMNS = 24 BLOCKS
+        const brickRowCount = 3; 
+        const brickColumnCount = 8; 
+        const brickWidth = 80; 
+        const brickHeight = 70; // Taller for full face framing
+        const brickPadding = 15;
+        
+        // Perfectly centered horizontally
+        const totalGridWidth = (brickColumnCount * brickWidth) + ((brickColumnCount - 1) * brickPadding);
+        const brickOffsetLeft = (canvas.width - totalGridWidth) / 2;
+        
+        // MOVED UP: Shifted the grid higher on the screen
+        const brickOffsetTop = 40; 
+        
+        let bricks = [];
+        let facesLoaded = false;
+
+        const faceList = [
+            "Elon Musk", "Donald Trump", "Joe Exotic", "Piers Morgan", "Saddam Hussein", 
+            "Vladimir Putin", "Nigel Farage", "Boris Johnson", "Pamela Anderson", 
+            "Katie Price", "Britney Spears", "Amy Winehouse", "Madonna", "Björk", 
+            "Rihanna", "Kim Kardashian", "Kris Jenner", "Naomi Campbell", 
+            "Margaret Thatcher", "Taylor Swift", "Nicki Minaj", "Angelina Jolie", 
+            "Lindsay Lohan", "Winona Ryder"
+        ];
+
+        async function fetchWikiImage(name) {
+            try {
+                let url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(name)}&prop=pageimages&format=json&pithumbsize=400&origin=*`;
+                let response = await fetch(url);
+                let data = await response.json();
+                let pages = data.query.pages;
+                let pageId = Object.keys(pages)[0];
+                if (pages[pageId].thumbnail && pages[pageId].thumbnail.source) {
+                    return pages[pageId].thumbnail.source;
+                }
+            } catch (e) { return null; }
+            return null;
+        }
+
+        async function loadFaces() {
+            facesLoaded = false;
+            let shuffled = [...faceList].sort(() => 0.5 - Math.random());
+            bricks = [];
+            
+            let uniqueFaces = shuffled.slice(0, brickColumnCount * brickRowCount);
+
+            let promises = [];
+            let index = 0;
+
+            for (let c = 0; c < brickColumnCount; c++) {
+                bricks[c] = [];
+                for (let r = 0; r < brickRowCount; r++) {
+                    let name = uniqueFaces[index];
+                    
+                    promises.push(
+                        fetchWikiImage(name).then(imgSrc => {
+                            let img = new Image();
+                            img.crossOrigin = "Anonymous"; 
+                            let status = 0;
+                            if (imgSrc) { 
+                                img.src = imgSrc; 
+                                status = 1; 
+                            }
+                            
+                            let maxHealth = 2;
+                            
+                            bricks[c][r] = { x: 0, y: 0, status: status, name: name, img: img, health: maxHealth, maxHealth: maxHealth };
+                        })
+                    );
+                    index++;
+                }
+            }
+            
+            await Promise.all(promises);
+            setTimeout(() => { facesLoaded = true; }, 100);
+        }
+
+        function resetGame() {
+            score = 0;
+            lives = 3;
+            isGameOver = false;
+            x = canvas.width / 2;
+            y = canvas.height - 30;
+            dx = 5;
+            dy = -5;
+            paddleX = (canvas.width - paddleWidth) / 2;
+            ballAttached = true;
+            updateUI();
+            gameOverScreen.style.display = 'none';
+            loadFaces(); 
+        }
+
+        function updateUI() {
+            scoreDisplay.innerText = score;
+            livesDisplay.innerText = lives;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight') rightPressed = true;
+            if (e.key === 'ArrowLeft') leftPressed = true;
+            if (e.key === ' ' && ballAttached && !isGameOver && facesLoaded) {
+                ballAttached = false;
+                dx = 5 * (Math.random() > 0.5 ? 1 : -1);
+                dy = -5;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowRight') rightPressed = false;
+            if (e.key === 'ArrowLeft') leftPressed = false;
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            const relativeX = e.clientX - canvas.getBoundingClientRect().left;
+            if (relativeX > 0 && relativeX < canvas.width) {
+                paddleX = relativeX - paddleWidth / 2;
+            }
+        });
+
+        function collisionDetection() {
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < brickRowCount; r++) {
+                    let b = bricks[c][r];
+                    if (b && b.status === 1 && b.img.complete && b.img.naturalHeight !== 0) {
+                        if (x > b.x && x < b.x + brickWidth && y > b.y && y < b.y + brickHeight) {
+                            
+                            if (dy > 0) { y = b.y - ballRadius; } 
+                            else { y = b.y + brickHeight + ballRadius; }
+                            
+                            dy = -dy;
+                            b.health--;
+                            
+                            if (b.health <= 0) {
+                                b.status = 0;
+                                score += 20; 
+                            } else {
+                                score += 10; 
+                            }
+                            
+                            updateUI();
+                            shakeTime = 5;
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#fff";
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#fff";
+            ctx.fill();
+            ctx.closePath();
+            ctx.shadowBlur = 0;
+        }
+
+        function drawPaddle() {
+            ctx.beginPath();
+            ctx.rect(paddleX, canvas.height - paddleHeight, paddleWidth, paddleHeight);
+            ctx.fillStyle = "#0ff";
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#0ff";
+            ctx.fill();
+            ctx.closePath();
+            ctx.shadowBlur = 0;
+        }
+
+        function drawBricks() {
+            if (!facesLoaded) {
+                ctx.fillStyle = "#0ff";
+                ctx.font = "20px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText("LOADING FACES...", canvas.width / 2, canvas.height / 2);
+                return;
+            }
+
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < brickRowCount; r++) {
+                    let b = bricks[c][r];
+                    
+                    if (b && b.status === 1) {
+                        let brickX = (c * (brickWidth + brickPadding)) + brickOffsetLeft;
+                        let brickY = (r * (brickHeight + brickPadding)) + brickOffsetTop;
+                        b.x = brickX;
+                        b.y = brickY;
+                        
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.rect(brickX, brickY, brickWidth, brickHeight);
+                        ctx.closePath();
+                        ctx.clip(); 
+
+                        if (b.img.complete && b.img.naturalHeight !== 0) {
+                            let imgAspect = b.img.width / b.img.height;
+                            let brickAspect = brickWidth / brickHeight;
+                            let sx, sy, sWidth, sHeight;
+
+                            if (imgAspect > brickAspect) {
+                                // Image is wider than box - crop sides
+                                sHeight = b.img.height;
+                                sWidth = sHeight * brickAspect;
+                                sx = (b.img.width - sWidth) / 2;
+                                sy = 0;
+                            } else {
+                                // Image is taller than box - Anchor to TOP (sy = 0) for headroom
+                                sWidth = b.img.width;
+                                sHeight = sWidth / brickAspect;
+                                sx = 0;
+                                sy = 0; // THIS FIXES THE CUT OFF HEADS
+                            }
+                            ctx.drawImage(b.img, sx, sy, sWidth, sHeight, brickX, brickY, brickWidth, brickHeight);
+                        }
+                        
+                        if (b.health < b.maxHealth) {
+                            ctx.fillStyle = "rgba(0, 0, 0, 0.4)"; 
+                            ctx.fillRect(brickX, brickY, brickWidth, brickHeight);
+                        }
+                        
+                        ctx.restore();
+
+                        ctx.beginPath();
+                        ctx.rect(brickX, brickY, brickWidth, brickHeight);
+                        
+                        if (b.health === b.maxHealth) {
+                            ctx.strokeStyle = "#0ff"; 
+                            ctx.lineWidth = 2;
+                        } else if (b.health === 1) {
+                            ctx.strokeStyle = "#ff3333"; 
+                            ctx.lineWidth = 4;
+                        }
+                        
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        function draw() {
+            if (isGameOver) return;
+
+            ctx.save();
+            if (shakeTime > 0) {
+                const shakeX = (Math.random() - 0.5) * 5;
+                const shakeY = (Math.random() - 0.5) * 5;
+                ctx.translate(shakeX, shakeY);
+                shakeTime--;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawBricks();
+            drawBall();
+            drawPaddle();
+            
+            if (facesLoaded) {
+                collisionDetection();
+            }
+
+            if (!ballAttached && facesLoaded) {
+                if (x + dx > canvas.width - ballRadius || x + dx < ballRadius) { dx = -dx; }
+                if (y + dy < ballRadius) { dy = -dy; } 
+                else if (y + dy > canvas.height - ballRadius) {
+                    if (x > paddleX && x < paddleX + paddleWidth) {
+                        let hitPoint = x - (paddleX + paddleWidth / 2);
+                        let normalizedHitPoint = hitPoint / (paddleWidth / 2);
+                        let angle = normalizedHitPoint * (Math.PI / 3);
+                        dx = 5 * Math.sin(angle);
+                        dy = -5 * Math.cos(angle);
+                        shakeTime = 3;
+                        y = canvas.height - paddleHeight - ballRadius;
+                    } else {
+                        lives--;
+                        updateUI();
+                        if (lives <= 0) {
+                            gameOverText.innerText = "GAME OVER";
+                            gameOverText.style.color = "#ff0055";
+                            gameOverScreen.style.borderColor = "#ff0055";
+                            gameOverScreen.style.display = 'flex';
+                            isGameOver = true;
+                            return;
+                        } else {
+                            x = paddleX + paddleWidth / 2;
+                            y = canvas.height - 30;
+                            ballAttached = true;
+                            dx = 5;
+                            dy = -5;
+                        }
+                    }
+                }
+                x += dx;
+                y += dy;
+            } else if (facesLoaded) {
+                x = paddleX + paddleWidth / 2;
+                y = canvas.height - paddleHeight - ballRadius;
+            }
+
+            if (rightPressed && paddleX < canvas.width - paddleWidth) { paddleX += 8; }
+            else if (leftPressed && paddleX > 0) { paddleX -= 8; }
+
+            ctx.restore();
+            requestAnimationFrame(draw);
+        }
+
+        // Start Game
+        resetGame();
+        draw();
+    </script>
+</body>
+</html>
